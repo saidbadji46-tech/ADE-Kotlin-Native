@@ -16,7 +16,8 @@ class AppState(private val context: Context) {
     var meters by mutableStateOf<List<Meter>>(emptyList())
     var routeNum by mutableStateOf("T00001")
     var triplet by mutableStateOf("1")
-    var worker by mutableStateOf("")
+    var worker by mutableStateOf("BENAMMAR Said")
+    var page by mutableStateOf("list")
     var query by mutableStateOf("")
     var tab by mutableStateOf(0)
     var openId by mutableStateOf<Long?>(null)
@@ -25,7 +26,7 @@ class AppState(private val context: Context) {
         meters = db.allMeters()
         routeNum = db.getSetting("route", "T00001")
         triplet = db.getSetting("triplet", "1")
-        worker = db.getSetting("worker", "")
+        worker = db.getSetting("worker", "BENAMMAR Said")
     }
 
     fun saveSettings(newWorker: String, newRoute: String, newTriplet: String) {
@@ -40,6 +41,25 @@ class AppState(private val context: Context) {
     fun saveMeter(m: Meter) {
         db.updateMeter(m)
         meters = meters.map { if (it.id == m.id) m else it }
+    }
+
+    /** يرجع رسالة خطأ، أو null عند النجاح. */
+    fun addMeter(code: String, name: String, serial: String, address: String, subType: String, prev: Double): String? {
+        val c = code.trim()
+        if (name.isBlank()) return "أدخل اسم المشترك"
+        if (c.isEmpty()) return "أدخل رمز الزبون"
+        if (meters.any { it.code.equals(c, ignoreCase = true) }) return "رمز الزبون موجود مسبقاً"
+        val m = Meter(
+            code = c,
+            name = name.trim(),
+            address = address.trim(),
+            subType = subType,
+            serial = serial.trim(),
+            prevIndex = prev
+        )
+        db.importRecords(listOf(m))
+        meters = db.allMeters()
+        return null
     }
 
     fun clearAll() {
