@@ -1,4 +1,3 @@
-
 package com.ade.meterreading
 
 import android.content.ContentUris
@@ -7,14 +6,18 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
+import java.io.FileOutputStream
+
+private const val DB_VERSION = 2
 
 /** قاعدة بيانات SQLite محلية لحفظ الزبائن والإعدادات. */
-class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, 1) {
+class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, DB_VERSION) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -22,13 +25,26 @@ class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, 1)
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "code TEXT NOT NULL, name TEXT NOT NULL, address TEXT, sub_type TEXT, serial TEXT, " +
                 "prev_index REAL, avg_cons INTEGER, new_index REAL, consumption REAL, amount INTEGER, " +
-                "status TEXT, annot TEXT, low_reason TEXT, obs TEXT, saved_at INTEGER, raw_line TEXT)"
+                "status TEXT, annot TEXT, low_reason TEXT, obs TEXT, saved_at INTEGER, raw_line TEXT, " +
+                "photo_path TEXT, lat REAL, lng REAL, loc_accuracy INTEGER)"
         )
         db.execSQL("CREATE INDEX idx_meters_code ON meters(code)")
         db.execSQL("CREATE TABLE settings (k TEXT PRIMARY KEY NOT NULL, v TEXT)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            for (col in listOf(
+                "photo_path TEXT", "lat REAL", "lng REAL", "loc_accuracy INTEGER"
+            )) {
+                try {
+                    db.execSQL("ALTER TABLE meters ADD COLUMN $col")
+                } catch (e: Exception) {
+                    // العمود موجود مسبقاً على الأغلب
+                }
+            }
+        }
+    }
 
     private fun toValues(m: Meter): ContentValues {
         val cv = ContentValues()
@@ -48,6 +64,10 @@ class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, 1)
         cv.put("obs", m.obs)
         if (m.savedAt == null) cv.putNull("saved_at") else cv.put("saved_at", m.savedAt)
         if (m.rawLine == null) cv.putNull("raw_line") else cv.put("raw_line", m.rawLine)
+        if (m.photoPath == null) cv.putNull("photo_path") else cv.put("photo_path", m.photoPath)
+        if (m.lat == null) cv.putNull("lat") else cv.put("lat", m.lat)
+        if (m.lng == null) cv.putNull("lng") else cv.put("lng", m.lng)
+        if (m.locAccuracy == null) cv.putNull("loc_accuracy") else cv.put("loc_accuracy", m.locAccuracy)
         return cv
     }
 
@@ -66,7 +86,10 @@ class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, 1)
             val i = c.getColumnIndexOrThrow(col)
             return if (c.isNull(i)) null else c.getLong(i)
         }
-        val rawIdx = c.getColumnIndexOrThrow("raw_line")
+        fun strOrNull(col: String): String? {
+            val i = c.getColumnIndexOrThrow(col)
+            return if (c.isNull(i)) null else c.getString(i)
+        }
         return Meter(
             id = c.getLong(c.getColumnIndexOrThrow("id")),
             code = str("code"),
@@ -84,7 +107,11 @@ class Db(context: Context) : SQLiteOpenHelper(context, "ade_meters.db", null, 1)
             lowReason = str("low_reason"),
             obs = str("obs"),
             savedAt = longOrNull("saved_at"),
-            rawLine = if (c.isNull(rawIdx)) null else c.getString(rawIdx)
+            rawLine = strOrNull("raw_line"),
+            photoPath = strOrNull("photo_path"),
+            lat = dblOrNull("lat"),
+            lng = dblOrNull("lng"),
+            locAccuracy = intOrNull("loc_accuracy")
         )
     }
 
@@ -242,5 +269,42 @@ object Exporter {
         val out = resolver.openOutputStream(uri, "wt") ?: return false
         out.use { it.write(bytes) }
         return true
+    }
+}
+
+/** حفظ صور العدادات داخل تخزين التطبيق الخاص (لا يحتاج إذن تخزين). */
+object PhotoStore {
+    private const val DIR_NAME = "meter_photos"
+
+    fun save(context: Context, meterId: Long, bitmap: Bitmap): String? {
+        return try {
+            val dir = File(context.filesDir, DIR_NAME)
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, "m_" + meterId + "_" + System.currentTimeMillis() + ".jpg")
+            val scaled = scaleDown(bitmap, 900)
+            FileOutputStream(file).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+            }
+            file.absolutePath
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun delete(path: String?) {
+        if (path == null) return
+        try {
+            File(path).delete()
+        } catch (e: Exception) {
+            // تجاهل
+        }
+    }
+
+    private fun scaleDown(bitmap: Bitmap, maxWidth: Int): Bitmap {
+        if (bitmap.width <= maxWidth) return bitmap
+        val ratio = maxWidth.toFloat() / bitmap.width
+        val h = (bitmap.height * ratio).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, maxWidth, h, true)
     }
 }
