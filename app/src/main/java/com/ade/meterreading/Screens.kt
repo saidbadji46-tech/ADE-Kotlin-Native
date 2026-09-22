@@ -4,48 +4,38 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,10 +46,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -70,21 +64,26 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val GREEN = Color(0xFF2E7D32)
-private val ORANGE = Color(0xFFEF6C00)
-private val GRAY = Color(0xFF757575)
+// ألوان تطبيق HTML الأصلي
+private val BLUE = Color(0xFF1565C0)
+private val ACCENT = Color(0xFFFF6F00)
+private val SUCCESS = Color(0xFF2E7D32)
+private val WARNING = Color(0xFFF57F17)
+private val DANGER = Color(0xFFC62828)
+private val SURFACE = Color(0xFFF5F5F5)
+private val LINE = Color(0xFFE0E0E0)
+private val INK = Color(0xFF212121)
+private val MUTED = Color(0xFF757575)
+private val WHITE = Color.White
 
-// ───────────────────────── قائمة الجولة ─────────────────────────
+// ───────────────────────── الجذر ─────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ListScreen(state: AppState) {
+fun AppRoot(state: AppState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var menuOpen by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var confirmClear by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var showAdd by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -99,6 +98,10 @@ fun ListScreen(state: AppState) {
         message = if (granted) state.exportResults() else "❌ لم يتم منح إذن الكتابة"
     }
 
+    fun startImport() {
+        picker.launch(arrayOf("*/*"))
+    }
+
     fun startExport() {
         val needPerm = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
@@ -110,166 +113,33 @@ fun ListScreen(state: AppState) {
         }
     }
 
-    val all = state.meters
-    val doneCount = all.count { it.hasReading }
-    val pendingCount = all.count { it.status != STATUS_DONE && it.status != STATUS_ANOM }
-    val anomCount = all.count { it.status == STATUS_ANOM }
-    val tabIndex = state.tab
-    val queryText = state.query
+    val id = state.openId
+    val open = if (id != null) state.meters.firstOrNull { it.id == id } else null
 
-    val visible = remember(all, queryText, tabIndex) {
-        val q = queryText.trim().lowercase()
-        val qFlat = q.replace(" ", "")
-        all.filter { m ->
-            val matchQ = q.isEmpty() ||
-                m.name.lowercase().contains(q) ||
-                m.code.lowercase().contains(q) ||
-                m.address.lowercase().contains(q) ||
-                m.serial.lowercase().replace(" ", "").contains(qFlat)
-            val matchTab = when (tabIndex) {
-                1 -> m.status != STATUS_DONE && m.status != STATUS_ANOM
-                2 -> m.hasReading
-                3 -> m.status == STATUS_ANOM
-                else -> true
+    BackHandler(enabled = open != null) { state.openId = null }
+    BackHandler(enabled = open == null && state.page != "list") { state.page = "list" }
+
+    if (open != null) {
+        MeterScreen(state, open)
+    } else {
+        Column(Modifier.fillMaxSize().background(SURFACE)) {
+            BlueTopBar(
+                title = "قراءات العدادات - " + state.worker,
+                badge = if (state.page == "manage") "إدارة" else state.routeNum
+            )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (state.page == "manage") {
+                    ManageScreen(state, onImport = { startImport() }, onExport = { startExport() })
+                } else {
+                    ListScreen(state, onImport = { startImport() })
+                }
             }
-            matchQ && matchTab
+            BottomNav(state, onAdd = { showAdd = true })
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("قراءات العدادات", fontWeight = FontWeight.Bold)
-                        Text("الجولة ${state.routeNum}  •  R${state.triplet}", fontSize = 12.sp, color = GRAY)
-                    }
-                },
-                actions = {
-                    Box {
-                        TextButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = 22.sp) }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("استيراد ملف الجولة") },
-                                onClick = {
-                                    menuOpen = false
-                                    picker.launch(arrayOf("*/*"))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("تصدير النتائج (ADE)") },
-                                onClick = {
-                                    menuOpen = false
-                                    startExport()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("الإعدادات") },
-                                onClick = {
-                                    menuOpen = false
-                                    showSettings = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("مسح كل البيانات") },
-                                onClick = {
-                                    menuOpen = false
-                                    confirmClear = true
-                                }
-                            )
-                        }
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("📊 نسبة الإنجاز", fontWeight = FontWeight.Bold)
-                    Text("$doneCount / ${all.size}")
-                }
-                Spacer(Modifier.height(6.dp))
-                val frac = if (all.isEmpty()) 0f else doneCount.toFloat() / all.size
-                Box(
-                    Modifier.fillMaxWidth().height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)).background(Color(0xFFE0E0E0))
-                ) {
-                    Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(GREEN))
-                }
-            }
-
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = { state.query = it },
-                singleLine = true,
-                placeholder = { Text("بحث بالاسم أو الرمز أو الرقم التسلسلي") },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            )
-            Spacer(Modifier.height(6.dp))
-
-            val labels = listOf(
-                "الكل (${all.size})",
-                "معلّقة ($pendingCount)",
-                "مقروءة ($doneCount)",
-                "ملاحظات ($anomCount)"
-            )
-            TabRow(selectedTabIndex = state.tab) {
-                labels.forEachIndexed { i, label ->
-                    Tab(
-                        selected = state.tab == i,
-                        onClick = { state.tab = i },
-                        text = { Text(label, fontSize = 12.sp, maxLines = 1) }
-                    )
-                }
-            }
-
-            if (all.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("🚰", fontSize = 40.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "لا توجد عدادات بعد.\nاستورد ملف الجولة (اسمه يبدأ بالحرف A) لبدء العمل.",
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { picker.launch(arrayOf("*/*")) }) { Text("استيراد ملف الجولة") }
-                }
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(visible, key = { it.id }) { m ->
-                        MeterRow(m) { state.openId = m.id }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showSettings) {
-        SettingsDialog(state) { showSettings = false }
-    }
-
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("مسح كل البيانات؟") },
-            text = { Text("سيتم حذف جميع الزبائن والقراءات المحفوظة. تأكد أنك صدّرت النتائج قبل ذلك.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClear = false
-                    state.clearAll()
-                }) { Text("نعم، امسح") }
-            },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("إلغاء") } }
-        )
+    if (showAdd) {
+        AddMeterDialog(state) { showAdd = false }
     }
 
     val msg = message
@@ -282,297 +152,76 @@ fun ListScreen(state: AppState) {
     }
 }
 
+// ───────────────────────── مكوّنات مشتركة ─────────────────────────
+
 @Composable
-fun MeterRow(m: Meter, onClick: () -> Unit) {
-    val barColor = when (m.status) {
-        STATUS_DONE -> GREEN
-        STATUS_ANOM -> ORANGE
-        else -> GRAY
-    }
-    val chip = when (m.status) {
-        STATUS_DONE -> "مرفوعة"
-        STATUS_ANOM -> m.annot.ifEmpty { "إشارة" }
-        else -> "معلّقة"
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
+fun BlueTopBar(title: String, badge: String? = null, onBack: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().background(BLUE).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            Box(Modifier.width(5.dp).fillMaxHeight().background(barColor))
-            Column(Modifier.weight(1f).padding(12.dp)) {
-                Text("#${m.code} · ${m.subType}", fontSize = 12.sp, color = GRAY)
-                Text(m.name, fontWeight = FontWeight.Bold)
-                Text("🔢 ${m.serial.ifEmpty { "—" }}   📍 ${m.address.ifEmpty { "—" }}", fontSize = 12.sp, color = GRAY)
-                if (m.hasReading) Text("💧 استهلاك ${fmt2(m.consumption)} م³", fontSize = 12.sp, color = GRAY)
-                Text(chip, fontSize = 12.sp, color = barColor, fontWeight = FontWeight.Bold)
+        if (onBack != null) {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(Color(0x1FFFFFFF)).clickable(onClick = onBack),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("›", color = WHITE, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
-            Box(Modifier.padding(12.dp), contentAlignment = Alignment.Center) {
-                val idx = m.newIndex
-                Text(
-                    if (idx != null) numToStr(idx) else "——",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = if (idx != null) GREEN else GRAY
-                )
-            }
+            Spacer(Modifier.width(10.dp))
         }
-    }
-}
-
-@Composable
-fun SettingsDialog(state: AppState, onClose: () -> Unit) {
-    var worker by remember { mutableStateOf(state.worker) }
-    var route by remember { mutableStateOf(state.routeNum) }
-    var triplet by remember { mutableStateOf(state.triplet) }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("الإعدادات") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = worker, onValueChange = { worker = it }, singleLine = true,
-                    label = { Text("اسم القارئ (يُكتب في ملف التصدير)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = route, onValueChange = { route = it }, singleLine = true,
-                    label = { Text("رقم الجولة") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = triplet, onValueChange = { triplet = it }, singleLine = true,
-                    label = { Text("الثلاثي (1 إلى 4)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                state.saveSettings(worker, route, triplet)
-                onClose()
-            }) { Text("حفظ") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("إلغاء") } }
-    )
-}
-
-// ───────────────────────── شاشة القراءة ─────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-fun MeterScreen(state: AppState, meter: Meter) {
-    val context = LocalContext.current
-    var indexText by remember(meter.id) { mutableStateOf(meter.newIndex?.let { numToStr(it) } ?: "") }
-    var annots by remember(meter.id) { mutableStateOf(parseAnnots(meter.annot)) }
-    var obs by remember(meter.id) { mutableStateOf(meter.obs) }
-    var highMsg by remember(meter.id) { mutableStateOf<String?>(null) }
-    var lowOpen by remember(meter.id) { mutableStateOf(false) }
-    val focus = remember(meter.id) { FocusRequester() }
-
-    LaunchedEffect(meter.id) {
-        if (meter.newIndex == null) {
-            try {
-                focus.requestFocus()
-            } catch (e: Exception) {
-                // لا شيء: قد لا تكون الشاشة جاهزة بعد
-            }
-        }
-    }
-
-    val value = parseNum(indexText)
-    val previewCons = if (value != null && value > meter.prevIndex) Math.round((value - meter.prevIndex) * 1000) / 1000.0 else 0.0
-    val previewAmount = if (previewCons > 0) Tariff.bill(previewCons) else 0L
-
-    fun toast(text: String) {
-        Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
-    }
-
-    fun commit(lowReason: String) {
-        val v = parseNum(indexText)
-        val hasSignal = annots.any { it != "00" }
-        val cons = if (v != null) Math.round(maxOf(0.0, v - meter.prevIndex) * 1000) / 1000.0 else 0.0
-        val amount = if (v != null) Tariff.bill(cons) else 0L
-        val updated = meter.copy(
-            newIndex = v,
-            consumption = cons,
-            amount = amount,
-            lowReason = lowReason,
-            obs = obs,
-            annot = annots.joinToString("+"),
-            status = if (hasSignal) STATUS_ANOM else STATUS_DONE,
-            savedAt = System.currentTimeMillis()
+        Text(
+            title, color = WHITE, fontSize = 18.sp, fontWeight = FontWeight.Black,
+            maxLines = 1, modifier = Modifier.weight(1f)
         )
-        state.saveMeter(updated)
-        toast("✅ تم الحفظ")
-        val next = state.nextPendingAfter(meter.id)
-        if (next != null) {
-            state.openId = next
-        } else {
-            toast("🎉 تم الانتهاء من كل العدادات المعلّقة")
-            state.openId = null
+        if (badge != null) {
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0x2EFFFFFF)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Text(badge, color = WHITE, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
+}
 
-    fun attemptSave(highConfirmed: Boolean) {
-        val v = parseNum(indexText)
-        val hasSignal = annots.any { it != "00" }
-
-        if (v != null && !highConfirmed) {
-            val cons = v - meter.prevIndex
-            val avg = meter.avgConsumption
-            if (avg != null && avg > 0 && cons > avg * 1.3) {
-                highMsg = "الاستهلاك ${numToStr(Math.round(cons * 1000) / 1000.0)} م³ أعلى من معدل هذا الزبون ($avg م³) بأكثر من 30%."
-                return
-            }
-        }
-
-        if (!hasSignal) {
-            if (v == null) {
-                toast("أدخل القراءة الجديدة")
-                return
-            }
-            if (v <= meter.prevIndex) {
-                lowOpen = true
-                return
-            }
-            commit("")
-        } else {
-            if (v != null && v <= meter.prevIndex) {
-                lowOpen = true
-                return
-            }
-            commit("")
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(meter.name, fontWeight = FontWeight.Bold, maxLines = 1)
-                        Text("#${meter.code}", fontSize = 12.sp, color = GRAY)
-                    }
-                },
-                navigationIcon = {
-                    TextButton(onClick = { state.openId = null }) { Text("رجوع") }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+@Composable
+fun BottomNav(state: AppState, onAdd: () -> Unit) {
+    Column(Modifier.fillMaxWidth().background(WHITE)) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("رقم الجولة: ${state.routeNum}   •   النوع: ${meter.subType}")
-                    Text("📍 ${meter.address.ifEmpty { "—" }}")
-                    Text("🔢 الرقم التسلسلي: ${meter.serial.ifEmpty { "—" }}")
-                    Text("القراءة السابقة: ${numToStr(meter.prevIndex)} م³", fontWeight = FontWeight.Bold)
-                    val avg = meter.avgConsumption
-                    if (avg != null) Text("المعدل المرجعي: $avg م³", fontSize = 12.sp, color = GRAY)
-                }
-            }
-
-            OutlinedTextField(
-                value = indexText,
-                onValueChange = { indexText = it },
-                singleLine = true,
-                label = { Text("القراءة الجديدة (م³)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus)
-            )
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            NavItem("☰", "القائمة", state.page == "list", Modifier.weight(1f)) { state.page = "list" }
+            Box(
+                Modifier.offset(y = (-14).dp).size(54.dp)
+                    .shadow(8.dp, CircleShape).clip(CircleShape).background(ACCENT)
+                    .clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center
             ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("الاستهلاك: ${fmt2(previewCons)} م³", fontWeight = FontWeight.Bold)
-                    Text("المبلغ الإجمالي: $previewAmount د.ج", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                }
+                Text("+", color = WHITE, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
-
-            Text("رمز الملاحظة", fontWeight = FontWeight.Bold)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                ANNOTATIONS.forEach { a ->
-                    val selected = annots.contains(a.code)
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            annots = if (selected) annots.filter { it != a.code } else annots + a.code
-                        },
-                        label = { Text(a.code + " · " + a.label, fontSize = 12.sp) }
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = obs,
-                onValueChange = { obs = it },
-                label = { Text("ملاحظة / observation") },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    val id = state.adjacent(meter.id, -1)
-                    if (id != null) state.openId = id
-                }) { Text("السابق") }
-                Button(onClick = { attemptSave(false) }, modifier = Modifier.weight(1f)) {
-                    Text("💾 حفظ والتالي")
-                }
-                OutlinedButton(onClick = {
-                    val id = state.adjacent(meter.id, 1)
-                    if (id != null) state.openId = id
-                }) { Text("التالي") }
-            }
-            Spacer(Modifier.height(24.dp))
+            NavItem("👤", "إدارة", state.page == "manage", Modifier.weight(1f)) { state.page = "manage" }
         }
     }
+}
 
-    val hm = highMsg
-    if (hm != null) {
-        AlertDialog(
-            onDismissRequest = { highMsg = null },
-            title = { Text("⚠️ تحقق من القراءة") },
-            text = { Text(hm + "\n\nهل تريد الحفظ رغم ذلك؟") },
-            confirmButton = {
-                TextButton(onClick = {
-                    highMsg = null
-                    attemptSave(true)
-                }) { Text("حفظ رغم ذلك") }
-            },
-            dismissButton = { TextButton(onClick = { highMsg = null }) { Text("تعديل القراءة") } }
-        )
-    }
-
-    if (lowOpen) {
-        AlertDialog(
-            onDismissRequest = { lowOpen = false },
-            title = { Text("⚠️ القراءة أقل أو تساوي السابقة") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("اختر سبباً لحفظ هذه القراءة:")
-                    LOW_REASONS.forEach { r ->
-                        OutlinedButton(
-                            onClick = {
-                                lowOpen = false
-                                commit(r)
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text(r) }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { lowOpen = false }) { Text("إلغاء") } }
-        )
+@Composable
+fun NavItem(icon: String, label: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier.clickable(onClick = onClick).padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(icon, fontSize = 20.sp, color = if (active) BLUE else MUTED)
+        Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = if (active) BLUE else MUTED)
     }
 }
+
+@Composable
+fun StdInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String = "",
+    keyboardType: KeyboardType = KeyboardType.Text,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier.fillMaxWidth().clip(RoundedCornerSh
