@@ -268,19 +268,28 @@ fun BlueButton(text: String, modifier: Modifier = Modifier, color: Color = BLUE,
 fun ListScreen(state: AppState, onImport: () -> Unit) {
     val focusManager = LocalFocusManager.current
     val all = state.meters
-    val doneCount = all.count { it.hasReading }
     val tabIndex = state.tab
     val queryText = state.query
+
+    fun matchesQuery(m: Meter, q: String, qFlat: String): Boolean =
+        q.isEmpty() ||
+            m.name.lowercase().contains(q) ||
+            m.code.lowercase().contains(q) ||
+            m.address.lowercase().contains(q) ||
+            m.serial.lowercase().replace(" ", "").contains(qFlat)
+
+    // "التقدم في الجولة" يحسب من العدادات المقروءة ضمن نتيجة البحث الحالية فقط، تماماً مثل renderAll() الأصلية.
+    val doneCount = remember(all, queryText) {
+        val q = queryText.trim().lowercase()
+        val qFlat = q.replace(" ", "")
+        all.count { it.hasReading && matchesQuery(it, q, qFlat) }
+    }
 
     val visible = remember(all, queryText, tabIndex) {
         val q = queryText.trim().lowercase()
         val qFlat = q.replace(" ", "")
         all.filter { m ->
-            val matchQ = q.isEmpty() ||
-                m.name.lowercase().contains(q) ||
-                m.code.lowercase().contains(q) ||
-                m.address.lowercase().contains(q) ||
-                m.serial.lowercase().replace(" ", "").contains(qFlat)
+            val matchQ = matchesQuery(m, q, qFlat)
             val matchTab = when (tabIndex) {
                 1 -> m.hasReading
                 2 -> m.status != STATUS_DONE && m.status != STATUS_ANOM
@@ -403,38 +412,43 @@ fun TabsBar(state: AppState) {
     }
 }
 
+/**
+ * مطابقة لـ getRouteStats() / renderRouteStatsPanel() في التطبيق الأصلي:
+ * - "عدادات مقروءة" = كل عداد فيه قراءة (hasReading)، حتى لو كان بإشارة.
+ * - "عدادات متبقية" = العدد الكلي ناقص (status=done) ناقص (status=anom).
+ * - "صفر استهلاك" و "فوق المعدل" تُحسبان فقط من العدادات المقروءة.
+ */
 @Composable
 fun StatsPanel(meters: List<Meter>) {
     var open by remember { mutableStateOf(true) }
     val total = meters.size
-    val done = meters.filter { it.hasReading }
-    val pending = meters.count { it.status != STATUS_DONE && it.status != STATUS_ANOM }
+    val statusDone = meters.count { it.status == STATUS_DONE }
+    val statusAnom = meters.count { it.status == STATUS_ANOM }
+    val pending = total - statusDone - statusAnom
+    val readMeters = meters.filter { it.hasReading }
     val inh = meters.count { parseAnnots(it.annot).contains("INH") }
-    val zero = done.count { it.consumption == 0.0 }
-    val over = done.count {
+    val zero = readMeters.count { it.consumption == 0.0 }
+    val over = readMeters.count {
         val avg = it.avgConsumption
         avg != null && avg > 0 && it.consumption > avg * 1.3
     }
-    val sumCons = done.sumOf { it.consumption }
-    val sumAmount = done.sumOf { it.amount }
+    val sumCons = readMeters.sumOf { it.consumption }
+    val sumAmount = readMeters.sumOf { it.amount }
     val leak = meters.count { parseAnnots(it.annot).contains("FC") }
-    val problems = meters.count { it.status == STATUS_ANOM }
-    val pct = if (total == 0) 0 else Math.round(done.size * 100.0 / total).toInt()
-    val withPhoto = meters.count { it.photoPath != null }
     val withGps = meters.count { it.lat != null && it.lng != null }
+    val pct = if (total == 0) 0 else Math.round(statusDone * 100.0 / total).toInt()
+    val consStr = if (sumCons == Math.floor(sumCons)) sumCons.toLong().toString() else fmt1(sumCons)
 
     val boxes = listOf(
         Triple(total.toString(), "👥 عدد الزبائن", BLUE),
-        Triple(done.size.toString(), "✅ عدادات مقروءة", SUCCESS),
+        Triple(readMeters.size.toString(), "✅ عدادات مقروءة", SUCCESS),
         Triple(pending.toString(), "⏳ عدادات متبقية", MUTED),
         Triple(inh.toString(), "🚫 عدد INH", WARNING),
         Triple(zero.toString(), "صفر استهلاك", WARNING),
-        Triple(over.toString(), "🔺 فوق المعدل", DANGER),
-        Triple(fmt2(sumCons), "💧 الاستهلاك م³", BLUE),
-        Triple(sumAmount.toString(), "💰 الثمن الكلي", SUCCESS),
+        Triple(over.toString(), "🔺 استهلاك فوق المعدل", DANGER),
+        Triple(consStr, "💧 كمية الاستهلاك م³", BLUE),
+        Triple(fmt2(sumAmount.toDouble()), "💰 الثمن الكلي للجولة", SUCCESS),
         Triple(leak.toString(), "💧 تسربات FC", Color(0xFF0288D1)),
-        Triple(problems.toString(), "⚠️ ذات مشاكل", DANGER),
-        Triple(withPhoto.toString(), "📷 صور محفوظة", BLUE),
         Triple(withGps.toString(), "📍 مواقع مسجلة", BLUE),
         Triple("$pct%", "📊 نسبة الإنجاز", SUCCESS)
     )
@@ -513,13 +527,7 @@ fun MeterRow(m: Meter, onClick: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text("🔢 ${m.serial.ifEmpty { "—" }}    📍 ${m.address.ifEmpty { "—" }}", fontSize = 11.5.sp, color = MUTED, maxLines = 2)
                 if (m.hasReading) {
-                    Text("📊 استهلاك ${fmt2(m.consumption)} م³", fontSize = 11.5.sp, color = MUTED)
-                }
-                if (m.photoPath != null || m.lat != null) {
-                    Text(
-                        (if (m.photoPath != null) "📷 " else "") + (if (m.lat != null) "📍" else ""),
-                        fontSize = 11.5.sp
-                    )
+                    Text("📊 استهلاك ${numToStr(m.consumption)} م³", fontSize = 11.5.sp, color = MUTED)
                 }
                 Spacer(Modifier.height(5.dp))
                 Box(Modifier.clip(RoundedCornerShape(10.dp)).background(chipBg).padding(horizontal = 8.dp, vertical = 2.dp)) {
@@ -622,6 +630,8 @@ fun AddMeterDialog(state: AppState, onClose: () -> Unit) {
     var serial by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var prev by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var nationalId by remember { mutableStateOf("") }
     var subType by remember { mutableStateOf("10") }
     val types = listOf("10" to "سكني", "20" to "إداري", "30" to "تجاري", "40" to "صناعي")
 
@@ -634,6 +644,8 @@ fun AddMeterDialog(state: AppState, onClose: () -> Unit) {
                 StdInput(code, { code = it }, placeholder = "رمز الزبون (مثل T00123)")
                 StdInput(serial, { serial = it }, placeholder = "الرقم التسلسلي للعداد")
                 StdInput(address, { address = it }, placeholder = "العنوان")
+                StdInput(phone, { phone = it }, placeholder = "الهاتف (اختياري)", keyboardType = KeyboardType.Phone)
+                StdInput(nationalId, { nationalId = it }, placeholder = "رقم التعريف الوطني (اختياري)", keyboardType = KeyboardType.Number)
                 StdInput(prev, { prev = it }, placeholder = "القراءة السابقة", keyboardType = KeyboardType.Decimal)
                 FieldLabel("نوع المشترك")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -654,7 +666,7 @@ fun AddMeterDialog(state: AppState, onClose: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                val err = state.addMeter(code, name, serial, address, subType, parseNum(prev) ?: 0.0)
+                val err = state.addMeter(code, name, serial, address, subType, parseNum(prev) ?: 0.0, phone, nationalId)
                 if (err != null) {
                     Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                 } else {
@@ -675,6 +687,8 @@ fun MeterScreen(state: AppState, meter: Meter) {
     var indexText by remember(meter.id) { mutableStateOf(meter.newIndex?.let { numToStr(it) } ?: "") }
     var annots by remember(meter.id) { mutableStateOf(parseAnnots(meter.annot)) }
     var obs by remember(meter.id) { mutableStateOf(meter.obs) }
+    var phone by remember(meter.id) { mutableStateOf(meter.phone) }
+    var nationalId by remember(meter.id) { mutableStateOf(meter.nationalId) }
     var highMsg by remember(meter.id) { mutableStateOf<String?>(null) }
     var lowOpen by remember(meter.id) { mutableStateOf(false) }
     var gpsBusy by remember(meter.id) { mutableStateOf(false) }
@@ -717,10 +731,6 @@ fun MeterScreen(state: AppState, meter: Meter) {
         }
     }
 
-    val value = parseNum(indexText)
-    val previewCons = if (value != null && value > meter.prevIndex) Math.round((value - meter.prevIndex) * 1000) / 1000.0 else 0.0
-    val previewAmount = if (previewCons > 0) Tariff.bill(previewCons) else 0L
-
     fun toast(text: String) {
         Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
     }
@@ -736,7 +746,11 @@ fun MeterScreen(state: AppState, meter: Meter) {
             amount = amount,
             lowReason = lowReason,
             obs = obs,
-            annot = annots.joinToString("+"),
+            phone = phone.trim(),
+            nationalId = nationalId.trim(),
+            // في الأصل: selectedAnnots.length ? selectedAnnots.join('+') : 'INH' — إذا ماخترش
+            // العامل أي رمز ملاحظة، يُسجَّل 'INH' افتراضياً (نفس سلوك index.html بالضبط).
+            annot = if (annots.isEmpty()) "INH" else annots.joinToString("+"),
             status = if (hasSignal) STATUS_ANOM else STATUS_DONE,
             savedAt = System.currentTimeMillis()
         )
@@ -792,28 +806,47 @@ fun MeterScreen(state: AppState, meter: Meter) {
 
         // ترويسة الزبون
         Column(Modifier.fillMaxWidth().background(WHITE).padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Text("#${meter.code}  ·  ${meter.subType}", fontSize = 13.sp, color = BLUE, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("#${meter.code}  ·  ${meter.subType}", fontSize = 13.sp, color = BLUE, fontWeight = FontWeight.Bold)
+                when (meter.meterStatus) {
+                    "EM" -> {
+                        Spacer(Modifier.width(6.dp))
+                        Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFFE8F5E9)).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                            Text("⚙️ يعمل (EM)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SUCCESS)
+                        }
+                    }
+                    "AR" -> {
+                        Spacer(Modifier.width(6.dp))
+                        Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFFFFEBEE)).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                            Text("⛔ متوقف (AR)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = DANGER)
+                        }
+                    }
+                }
+            }
             Text(meter.name, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
             Text("📍 ${meter.address.ifEmpty { "—" }}", fontSize = 12.sp, color = MUTED, modifier = Modifier.padding(top = 2.dp))
             Text("🔢 ${meter.serial.ifEmpty { "—" }}", fontSize = 12.sp, color = MUTED)
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    FieldLabel("📞 هاتف الزبون")
+                    StdInput(phone, { phone = it }, placeholder = "05xxxxxxxx", keyboardType = KeyboardType.Phone)
+                }
+                Column(Modifier.weight(1f)) {
+                    FieldLabel("🪪 رقم التعريف الوطني")
+                    StdInput(nationalId, { nationalId = it }, placeholder = "اختياري", keyboardType = KeyboardType.Number)
+                }
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
 
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
             // القراءة الجديدة
+            // ملاحظة: في index.html الحالي (الكامل)، القراءة السابقة ومعاينة الاستهلاك/المبلغ
+            // مخفية عمداً بـ style="display:none" (dPrevIndex و .cons-preview) — العامل
+            // لا يراها أثناء التسجيل رغم أنها تُحسب داخلياً. نطابق نفس السلوك هنا.
             Column(Modifier.fillMaxWidth().background(WHITE).padding(horizontal = 14.dp, vertical = 12.dp)) {
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("القراءة الجديدة (م³)", fontSize = 11.5.sp, color = MUTED, fontWeight = FontWeight.Bold)
-                    Text(
-                        "السابقة: " + numToStr(meter.prevIndex),
-                        fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clip(RoundedCornerShape(5.dp)).background(SURFACE).padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
+                Text("القراءة الجديدة (م³)", fontSize = 11.5.sp, color = MUTED, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 6.dp))
                 Box(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(WHITE)
                         .border(2.dp, BLUE, RoundedCornerShape(8.dp)).padding(horizontal = 14.dp, vertical = 12.dp)
@@ -829,10 +862,6 @@ fun MeterScreen(state: AppState, meter: Meter) {
                         ),
                         modifier = Modifier.fillMaxWidth().focusRequester(focus)
                     )
-                }
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PreviewBox(fmt2(previewCons), "الاستهلاك م³", Modifier.weight(1f))
-                    PreviewBox(previewAmount.toString(), "المبلغ (د.ج)", Modifier.weight(1f))
                 }
             }
             Box(Modifier.fillMaxWidth().height(8.dp))
@@ -1001,17 +1030,5 @@ fun MeterScreen(state: AppState, meter: Meter) {
             confirmButton = {},
             dismissButton = { TextButton(onClick = { lowOpen = false }) { Text("إلغاء") } }
         )
-    }
-}
-
-@Composable
-fun PreviewBox(value: String, label: String, modifier: Modifier) {
-    Column(
-        modifier.clip(RoundedCornerShape(7.dp)).background(SURFACE)
-            .border(1.dp, LINE, RoundedCornerShape(7.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(value, fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = BLUE)
-        Text(label, fontSize = 10.5.sp, color = MUTED)
     }
 }
