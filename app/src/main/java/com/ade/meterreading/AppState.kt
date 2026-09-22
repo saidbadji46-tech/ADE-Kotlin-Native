@@ -63,9 +63,22 @@ class AppState(private val context: Context) {
     }
 
     fun clearAll() {
+        for (m in meters) PhotoStore.delete(m.photoPath)
         db.deleteAllMeters()
         meters = emptyList()
         openId = null
+    }
+
+    fun savePhoto(meterId: Long, bitmap: android.graphics.Bitmap) {
+        val m = meters.firstOrNull { it.id == meterId } ?: return
+        val path = PhotoStore.save(context, meterId, bitmap) ?: return
+        PhotoStore.delete(m.photoPath)
+        saveMeter(m.copy(photoPath = path))
+    }
+
+    fun saveLocation(meterId: Long, gps: GpsResult) {
+        val m = meters.firstOrNull { it.id == meterId } ?: return
+        saveMeter(m.copy(lat = gps.lat, lng = gps.lng, locAccuracy = gps.accuracy))
     }
 
     fun nextPendingAfter(id: Long): Long? {
