@@ -23,7 +23,11 @@ data class Meter(
     val lowReason: String = "",
     val obs: String = "",
     val savedAt: Long? = null,
-    val rawLine: String? = null
+    val rawLine: String? = null,
+    val photoPath: String? = null,
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val locAccuracy: Int? = null
 ) {
     val hasReading: Boolean get() = newIndex != null
 }
