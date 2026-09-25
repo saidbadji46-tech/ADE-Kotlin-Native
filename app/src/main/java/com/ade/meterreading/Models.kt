@@ -18,6 +18,7 @@ data class Meter(
     val meterStatus: String? = null,
     val phone: String = "",
     val nationalId: String = "",
+    val signaturePath: String? = null,
     val newIndex: Double? = null,
     val consumption: Double = 0.0,
     val amount: Long = 0L,
